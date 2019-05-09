@@ -20,11 +20,12 @@ void handleErr(int err, const char msg[])
 int main(int argc, char const *argv[])
 {
   int client_fd = socket(AF_INET,SOCK_STREAM,0), server,valread,valsend;
-  int opt=1 ;
-  
+  int opt=1 ;  
   char buffer[1024]{0};
   handleErr(client_fd, "socket create failed");
-  
+  handleErr(
+    setsockopt(client_fd, SOL_SOCKET, SO_REUSEADDR|SO_REUSEPORT,&opt, sizeof(opt)),
+    "set socket option failed");  
   struct sockaddr_in my_address,server_address;
 
   my_address.sin_family = AF_INET;
