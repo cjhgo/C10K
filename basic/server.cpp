@@ -39,14 +39,16 @@ int main(int argc, char const *argv[])
   handleErr(
     listen(server_fd, 5),
     "liseten connection error");
-  
-  client = accept(server_fd, (sockaddr*)&address,(socklen_t*)&addresslen);
-  handleErr(client, "accept error");
-  std::cout<<client<<std::endl;
-  valread = read(client, buffer, 1024);
-  printf("%s\n", buffer);
+  while(true)
+  {  
+    client = accept(server_fd, (sockaddr*)&address,(socklen_t*)&addresslen);
+    handleErr(client, "accept error");
+    std::cout<<"accept "<<client<<"\t"<<address.sin_port<<std::endl;
+    valread = read(client, buffer, 1024);
+    printf("%s\n", buffer);
 
-  valsend = send(client, "hello client", 12,0);
-  printf("value %d send\n", valsend);
+    valsend = send(client, "hello client", 12,0);
+    printf("value %d send\n", valsend);
+  }
   return 0;
 }
