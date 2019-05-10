@@ -9,13 +9,15 @@
 #define PORT 8899
 #define MAXEVENTS 10
 
-void handleErr(int err, const char msg[])
+int handleErr(int err, const char msg[],bool exitnow=false)
 {
   if( err == -1)
   {
+    printf("the errno is %d\n",errno);
     perror(msg);
-    exit(EXIT_FAILURE);
+    if(exitnow)exit(EXIT_FAILURE);
   }
+  return err;
 }
 class Server
 {

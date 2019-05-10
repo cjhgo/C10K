@@ -6,16 +6,19 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <errno.h>
 #define PORT 8899
 
 
-void handleErr(int err, const char msg[])
+int handleErr(int err, const char msg[],bool exitnow=false)
 {
   if( err == -1)
   {
+    printf("the errno is %d\n",errno);
     perror(msg);
-    exit(EXIT_FAILURE);
+    if(exitnow)exit(EXIT_FAILURE);
   }
+  return err;
 }
 int main(int argc, char const *argv[])
 {
