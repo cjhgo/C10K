@@ -11,7 +11,8 @@
 #include <arpa/inet.h> for inet_pton
 ```
 
-+ socket,创建一个套接字,返回一个socket 文件描述符
++ socket,
+创建一个套接字,返回一个socket 文件描述符
 `int sockfd = socket(int domain, int type, int protocol);`
   - domain参数指定网络层协议,
   AF代表address family,即网络通信地址家族
@@ -32,7 +33,8 @@
   int setsockopt(int sockfd, int level, int optname,
                 const void *optval, socklen_t optlen);
   ```
-+ bind,把套接字绑定到某个端口地址
++ bind,
+把套接字绑定到某个端口地址
 `int bind(int sockfd, const struct sockaddr *addr,socklen_t addrlen);`
 用socket函数创建出来的套接字只指定了具体的domain,bind函数用于给socket分配具体的地址,地址addr是一个`sockaddr`结构体,其定义如下:
   ```c
@@ -48,11 +50,13 @@
     如果server 套接字调用listen的时候未绑定地址,或者client套接字调用connect的时候未绑定地址,
     系统都会自动给它们绑定`INADDR_ANY:free random port`这样一个地址.
     因此,server套接字要对外服务必须手动绑定端口地址,client套接字只需要知道server地址因此让系统自动绑定端口地址.
-+ listen,在套接字上启动监听链接
++ listen,
+在套接字上启动监听链接
 `int listen(int sockfd, int backlog);`
 使sockfd这个服务端套接字处于主动的监听状态,backlog指定允许多少个套接字等待被accept
 返回值0表示调用成功,-1表示调用失败
-+ accept,从监听状态的sockfd套接字上接受一个来自client的链接
++ accept,
+从监听状态的sockfd套接字上接受一个来自client的链接
 `int new_socket= accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);`
 返回一个代表client的文件描述符,后续可以对这个文件描述符读写,就是对client进行读写.
 `client的地址会填充到addr参数中,addrlen代表client的实际的地址长度.`
@@ -64,21 +68,30 @@
 有两种方式把这个调用指定为非阻塞的.
 一种是设置sockfd这个描述符的type为SOCK_NONBLOCK
 一种是使用accept4,在flag参数中设置SOCK_NONBLOCK,不过这个函数是非标准的linux扩展,不能跨平台使用.
-+ connect,把sockfd这个套接字和位于地址addr上的server套接字建立链接
++ connect,
+把sockfd这个套接字和位于地址addr上的server套接字建立链接
 `int connect(int sockfd, const struct sockaddr *addr,socklen_t addrlen);`
 返回值表明是否成功建立链接,0成功,-1失败
-+ read,从一个文件描述符中读取内容
+如果sockfd是一个nonblock socket,那么connect调用会返回`EINPROGRESS`,表明无法马上即建立链接.
+connect这一步没必要使用nonblock,握手链接有必要等待,这个时候就不能在`socket`调用的时候设置nonblock,
+此时就用到了`fcntl`这个函数来设置socket的属性为`O_NONBLOCK`.
++ read,
+从一个文件描述符中读取内容
 `ssize_t read(int fd, void *buf, size_t count);`
 从fd中尝试读取count个byte到buf中,返回实际读取了多少byte
 这个系统调用也会体现网络io是否阻塞.
 当fd这个套接字目前没有消息到来的时候,
 如果fd这个套接字是阻塞的调用会一直等待,如果是非阻塞的会返回`EAGAIN or EWOULDBLOCK`
-+ write,向一个文件描述符写内容
++ write,
+向一个文件描述符写内容
 `ssize_t write(int fd, const void *buf, size_t count);`
 和read类似,这个系统调用也体现网络io是否阻塞
-+ send,向一个套接字发送消息
++ send,
+向一个套接字发送消息
 `ssize_t send(int sockfd, const void *buf, size_t len, int flags);
 `和write类似,但是专用于写socket,flags变量用于指定额外的选项,如果为0,等价于write
+**对于read来说block是等待peer发送数据,对于send/write来说block是等待缓冲区有空间**
+(缓冲区到底在哪里,是什么,就依赖于对os的理解了)
 + socket编程流程
   1. 使用socket函数创建套接字
   2. server端:bind->listen->accept->send/receive
@@ -91,6 +104,22 @@
 这个地方通过创建server socket的时候设置
 + 第二个是对client socket 进行read/send操作的时候,read是否会一直等待peer发送数据,send是否会一直等待peer接收数据.
 这个地方通过使用`accept4`设置或者用`fcntl`设置client
++ nonblock client socket 调用connect的时候会返回`EINPROGRESS`,client socket connect的时候没必要nonblock
+
+**nonblock socket调用read/send可能block的时候,EAGAIN是设置在errno这个变量中的,read/send本身返回的是-1**
+(想想确实应该这样,EAGAIN的值是11,如果返回11岂不是和读了11byte混淆了)
+
+怎样用`fcntl`来设置socket为nonblock
+```c
+int flags = handleErr(
+      fcntl(client_fd, F_GETFL), 
+      "could not get file flags");
+handleErr(
+      fcntl(client_fd, F_SETFL, flags | O_NONBLOCK), 
+      "could not set file flags");
+```
+第一步要获取flag,第二步才能设置,至于fcntl函数的详细理解,甚至于setsockopt中的level的概念,又是另一个话题了.
+
 
 ### epoll api
 `#include <sys/epoll.h>`
@@ -258,3 +287,4 @@ int epoll_pwait(int epfd, struct epoll_event *events,
 tions.  (Suppose the signal handler sets a global flag and returns.  Then a test of this global flag followed by a call of select() could hang indefinitely if the  signal  arrived
 just after the test but just before the call.  By contrast, pselect() allows one to first block signals, handle the signals that have come in, then call pselect() with the desired
 sigmask, avoiding the race.)
+### libevent
