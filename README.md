@@ -1,3 +1,5 @@
+[toc]
+
 ## C10K
 
 ### c/c++ socket api
@@ -83,6 +85,13 @@
   3. client端:connect->send/receive
   
 
+
+有两个环节体现阻塞与非阻塞
++ 第一个是server socket 进行accept操作的时候,server socket是否会一直等待直到有客户端进来.
+这个地方通过创建server socket的时候设置
++ 第二个是对client socket 进行read/send操作的时候,read是否会一直等待peer发送数据,send是否会一直等待peer接收数据.
+这个地方通过使用`accept4`设置或者用`fcntl`设置client
+
 ### epoll api
 `#include <sys/epoll.h>`
 
@@ -119,4 +128,133 @@ op操作包括:
 `int epoll_wait(int epfd, struct epoll_event *events,int maxevents, int timeout);`
 在epfd等待事件发生,具体发生的事件会填充到events这个指针中去,maxevents指定最多等待多少个事件,timeout以ms为单位指定等待多长时间,-1指定一直等待,0指定不等待.
 调用成功返回ready的fd的数量,或者超时的时候返回0,调用失败返回-1.
+
+linux在`/proc/sys/fs/epoll/max_user_watches`指定了系统中一个user启动的所有epoll实例能够监听的文件描述符的上限.
+
+
+在`/proc/[pid]/fdinfo`中可以看到一个进程的epoll set中的文件描述符
+
 #### 边缘触发和水平触发
+epoll的事件分发接口提供边缘触发(edge-triggered,et)和水平触发(level-triggered,lt)两种机制,它们的区别可以在下边的例子场景中体现出来:
+
+1. epoll实例中注册了用于read的一个文件描述符,rfd
+2. 另一端向rfd中写入了2kb的数据
+3. epoll_wait调用结束返回一个可读的rfd
+4. 程序从rfd中读去了1kb的数据(还有1kb数据没读取)
+5. 再次调用epoll_wait,等待剩余的1kb数据
+
+在edge-triggered模式下,epoll实例只在监听的文件描述符**状态发生改变的时候**(从不可读变成可读)发出一次通知.
+因此在第5步中,尽管剩余的1kb数据已经送达,但是epoll实例不会再次返回可读事件,同时另一端也在等待自己读完所有的2kb数据,
+那么这个步骤5中的epoll_wait就会一直等待下去(hang).
+即边缘触发模式只在状态边缘通知一次事件,read消费了这次事件后如果没有读完所有的内容,那么后来的epoll_wait就block indefinitely.
+
+使用边缘触发模式的时候,应用程序应该使用非阻塞的文件描述符,因为阻塞的文件描述符读写的时候会使应用程序产生饥饿现象,详见后边.
+具体而言,规则如下
+1. 使用非阻塞的文件描述符
+2. 只在发生EAGAIN的情况下等待事件
+(发生eagain说明读完了缓冲中的数据,上边例子中发了2kb,读了1kb就不会返回eagain)
+
+
+水平触发模式下,只要文件描述符可读或可写,epoll实例就会分发相应的事件,这种情况下的epoll相当于一个更高效的poll.
+(也就是说epoll相对于poll提供了et模式).
+
+
+epoll提供了`EPOLLONESHOT`事件,使得某个文件描述符被通知一次后内部后续就不再提供通知,程序员自己要再次调用EPOLL_CTL_MOD来启用通知.
+
+#### epoll Q&A
+0. Q:epoll set中用什么来区分程序注册进来的文件描述符?
+A:用the file descriptor number + the open file description
+(后者又叫做open file handle, 是内核对打开的文件的内部表示)
+1. Q:在一个epoll实例中把同一个文件描述符注册两次会怎样?
+A:也许会收到`EEXIST`报错.不过通过`dup`调用可以向epoll实例中再次注册一个文件描述符.
+2. Q:两个epoll实例能监听同一个文件描述符吗?如果能,事件是怎么报告的?
+A:能,两个实例都收到事件.
+3. Q:一个epoll自己能够被轮询吗?
+A:可以(但不能轮询自己).
+4. Q:一个epoll实例轮询自己会怎样?即把自己通过epoll_ctl放入自己的epoll_set
+A:会报错`EINVAL`
+5. Q:可以通过unix socket把一个epoll文件描述符发送给另一个进程吗?
+A:可以,但这样做没意义,因为接收进程收到epoll set没有原来的文件描述符.
+6. Q:关闭一个文件描述符会使得它从epoll set中自动移出吗?
+A:会,但同时要考虑下述情况.文件描述符是对打开的文件的引用.
+通过`dup/fcntl/F_DUPFD/fork`会造成对同一个打开的文件的多个引用(多个文件描述符指向同一个文件).只有当所有的文件描述符都close之后,打开的文件才会被真正close.
+7. Q:epoll_wait之间发生了多次事件,这些事件是分别报告还是组合报告?
+A:组合报告
+8. Q:对文件描述符的操作会影响已经收集但是还没有报告的事件吗?
+A:没看懂这个问题,,,
+9. Q:当使用et模式的时候,我需要持续读写直到遇到了EAGAIN吗?
+A:使用et模式的时候,从epoll_wait中收到事件表明文件描述符可以用于你所请求的io操作.(ready for requested io).
+在读写产生EAGAIN之前,你都要认为这个文件描述符是可读写的.(因此是的).
+不过,何时和如何使用这个文件描述符完全取决于你.
+如果udp协议,那确实是这样,判断读完或写完的唯一方式就是一直读直到产生了EAGAIN.
+如果是tcp协议,还有其他判断读写空间消耗完毕的方式.比如你请求读2kb的数据,但是read告诉你实际读了1kb的数据,那么你当然知道,已经读完了.
+(为什么,udp不能这样,,)
+#### 使用epoll常见的陷阱和解决方法
++ 饥饿现象,为什么要用非阻塞socket
+epoll+阻塞socket会产生饥饿现象.原因是这样的,
+使用epoll的时候我们一般是用一个epoll实例监听多个socket,即一个主线程的io-loop循环.
+使用阻塞socket,主线程有可能陷入等待,而此时其他可读写的socket无法被处理,得不到cpu资源,这些本该被处理的socket就处于饥饿状态.
+因此要使用非阻塞socket.
+还有一种情况也说明使用非阻塞socket的必要性.
+epoll报告了可读事件,但是由于校验失败,数据被丢弃了,此时去读如果是阻塞的socket就会一直等待下去.
++ 使用event cache时容易出现的问题
+If  you use an event cache or store all the file descriptors returned from epoll_wait(2), 
+then make sure to provide a way to mark its closure dynamically (i.e., caused by a previous event's processing)
+
+### 其他多路复用,poll/select/ppoll/ppselect
+除了epoll之外,linux还提供了poll/select用于多路复用
+#### poll
+`#include <poll.h>`
+`int poll(struct pollfd *fds, nfds_t nfds, int timeout);`
+
+fds是一个数组,nfds指明了这个数组的长度
+pollfd结构体定义如下:
+```c
+struct pollfd {
+    int   fd;         /* file descriptor */要监听的文件描述符
+    short events;     /* requested events */感兴趣的事件
+    short revents;    /* returned events */返回时填充了监听到的事件
+};
+```
+#### select
+```c
+#include <sys/select.h>
+
+int select(int nfds, fd_set *readfds, fd_set *writefds,
+        fd_set *exceptfds, struct timeval *timeout);        
+void FD_CLR(int fd, fd_set *set);从set中去除fd
+int  FD_ISSET(int fd, fd_set *set);判断fd是否在set中
+void FD_SET(int fd, fd_set *set);把fd加入到set中
+void FD_ZERO(fd_set *set);清除一个set
+```        
+监听readfds中文件描述符的可读事件,writefds中的可写事件,exceptfd中的异常事件,三个set皆可为空.
+nfds+1指定了三个set的最高size
+select调用返回三个set中发生事件的fd的总数
+
+提供了4个宏来操作这些set
+
+执行`select(0,null,null,null,time)`可以用于亚秒精度的sleep
+
+select只能监听不超过`FD_SETSIZE`数量的文件描述符,glibc实现中这个值是1024,也就是说select智能监听不超过1024个文件描述符,poll没有这个限制.
+
+select中的fd_set是一个`fixed size buffer`,poll虽然没有1024的限制但是也要在参数中指定nfds,而epoll完全是动态add/remove的set,所以epoll>poll>select.
+#### 加入信号机制的多路复用
+```c
+int pselect(int nfds, fd_set *readfds, fd_set *writefds,
+              fd_set *exceptfds, const struct timespec *timeout,
+              const sigset_t *sigmask);
+
+int ppoll(struct pollfd *fds, nfds_t nfds,
+        const struct timespec *tmo_p, 
+        const sigset_t *sigmask);
+
+int epoll_pwait(int epfd, struct epoll_event *events,
+              int maxevents, int timeout,
+              const sigset_t *sigmask);
+```
+为什么要加入信号机制?
+>man pselect:
+>The reason that pselect() is needed is that if one wants to wait for either a signal or for a file descriptor to become ready, then an atomic test is needed to prevent race condi‐
+tions.  (Suppose the signal handler sets a global flag and returns.  Then a test of this global flag followed by a call of select() could hang indefinitely if the  signal  arrived
+just after the test but just before the call.  By contrast, pselect() allows one to first block signals, handle the signals that have come in, then call pselect() with the desired
+sigmask, avoiding the race.)
