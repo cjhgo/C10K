@@ -11,6 +11,7 @@
 #include <netinet/in.h>
 #include <unistd.h>
 #include <iostream>
+#include <errno.h>
 
 
 int handleErr(int err, const char msg[],bool exitnow=false)
