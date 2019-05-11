@@ -266,7 +266,9 @@ select调用返回三个set中发生事件的fd的总数
 
 select只能监听不超过`FD_SETSIZE`数量的文件描述符,glibc实现中这个值是1024,也就是说select智能监听不超过1024个文件描述符,poll没有这个限制.
 
-select中的fd_set是一个`fixed size buffer`,poll虽然没有1024的限制但是也要在参数中指定nfds,而epoll完全是动态add/remove的set,所以epoll>poll>select.
+select中的fd_set是一个`fixed size buffer`,poll虽然没有1024的限制但是也要在参数中指定nfds,而epoll完全是动态add/remove的set.
+并且轮询结束的时候,select/poll都需要O(n)的遍历set来判断事件是否发生,epoll会把发生的事件填充到指针参数中,不需要O(n)的遍历.
+所以epoll>poll>select.不过在程序的可移植性方面,这个顺序是反过来的.
 #### 加入信号机制的多路复用
 ```c
 int pselect(int nfds, fd_set *readfds, fd_set *writefds,
@@ -288,3 +290,29 @@ tions.  (Suppose the signal handler sets a global flag and returns.  Then a test
 just after the test but just before the call.  By contrast, pselect() allows one to first block signals, handle the signals that have come in, then call pselect() with the desired
 sigmask, avoiding the race.)
 ### libevent
+libevent , 异步io?
+
+libevent提供了一个跨平台可移植的轮询操作api.
+select太低效,linux上有epoll,BSD上有kqueue.
+
+A tiny introduction to asynchronous IO
+http://www.wangafu.net/~nickm/libevent-book/01_intro.html
+http://www.wangafu.net/~nickm/libevent-2.1/doxygen/html/
+
+
+### 参考资料
+
+https://idea.popcount.org/2017-02-20-epoll-is-fundamentally-broken-12/
+https://idea.popcount.org/2017-03-20-epoll-is-fundamentally-broken-22/
+
+http://www.kegel.com/c10k.html
+
+
+unix 网络编程 卷1 套接字编程 在线版本
+http://www.masterraghu.com/subjects/np/introduction/unix_network_programming_v1.3/toc.html
+
+
+一份100页的套接字编程介绍材料,相较于史蒂文斯的900页的教材,这个算精简的
+http://beej.us/guide/bgnet/pdf/bgnet_A4.pdf
+https://www.gta.ufrj.br/ensino/eel878/sockets/index.html
+http://beej.us/guide/bgnet/html/single/bgnet.html
