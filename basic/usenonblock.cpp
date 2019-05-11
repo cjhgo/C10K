@@ -9,8 +9,6 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include <error.h>
-#include <errno.h>
 #define PORT 8899
 
 
