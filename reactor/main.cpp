@@ -1,3 +1,4 @@
+#include <signal.h>
 #include "util.hpp"
 #include "server.hpp"
 #include "ThreadPool/ThreadPool.hpp"
@@ -10,6 +11,7 @@ void handleEvent(int fd)
 {
   int client = fd;
 
+  signal(SIGPIPE, SIG_IGN);
   if( fd == server)
   {
     struct sockaddr_in address;
@@ -45,6 +47,11 @@ void handleEvent(int fd)
                       send(client,s.c_str(),n,0),
                       "send to client error");
       if( valsend > 0)sendlen += valsend;
+      else if( valsend == 0 || errno == 32)
+      {
+        std::cout<<"client "<<client<<"closed"<<std::endl;
+        break;
+      }
       else if( errno == EWOULDBLOCK)
       {
         usleep(2000*1000);
@@ -85,8 +92,7 @@ int main(int argc, char const *argv[])
       auto e = events[i];      
       tp.add(Task(handleEvent, e.data.fd));
     }
-  }    
-  tp.join();
-  std::cout<<"io loop ending...\n";
+  }      
+  tp.join();  
   return 0;
 }
