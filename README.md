@@ -109,7 +109,7 @@ connect这一步没必要使用nonblock,握手链接有必要等待,这个时候
 **nonblock socket调用read/send可能block的时候,EAGAIN是设置在errno这个变量中的,read/send本身返回的是-1**
 (想想确实应该这样,EAGAIN的值是11,如果返回11岂不是和读了11byte混淆了)
 
-怎样用`fcntl`来设置socket为nonblock
+#### 怎样用`fcntl`来设置socket为nonblock
 ```c
 int flags = handleErr(
       fcntl(client_fd, F_GETFL), 
@@ -120,6 +120,9 @@ handleErr(
 ```
 第一步要获取flag,第二步才能设置,至于fcntl函数的详细理解,甚至于setsockopt中的level的概念,又是另一个话题了.
 
+#### 如何处理关闭的套接字
+signal(SIGPIPE, SIG_IGN);
+errno 32 broken pipe
 
 ### epoll api
 `#include <sys/epoll.h>`
@@ -316,3 +319,20 @@ http://www.masterraghu.com/subjects/np/introduction/unix_network_programming_v1.
 http://beej.us/guide/bgnet/pdf/bgnet_A4.pdf
 https://www.gta.ufrj.br/ensino/eel878/sockets/index.html
 http://beej.us/guide/bgnet/html/single/bgnet.html
+
+
+
+
+
+
+
+操作系统缓冲区
+
+when send block
+operating system buffer nic
+操作系统 缓冲区
+operating system buffer
+socket buffer
+
+https://stackoverflow.com/questions/30429002/when-would-a-blocking-socket-send-block-udp
+https://eklitzke.org/how-tcp-sockets-work
