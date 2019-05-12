@@ -16,7 +16,7 @@ void ThreadPool::worker()
       this->task_queue.waitAndpop(t);
     }
     t.fun(t.taskid);
-    std::cout<<t.taskid<<std::endl;
+    std::cout<<"finish processing"<<t.taskid<<std::endl;
   }
 }
 
