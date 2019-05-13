@@ -11,7 +11,7 @@ void handleEvent(int fd)
 {
   int client = fd;
 
-  signal(SIGPIPE, SIG_IGN);
+  // signal(SIGPIPE, SIG_IGN);
   if( fd == server)
   {
     struct sockaddr_in address;
@@ -33,7 +33,7 @@ void handleEvent(int fd)
     int valread = handleErr(
                     read(client, buffer, 1024),
                     "read from client error");
-    std::cout<<"the read res is "<<valread<<std::endl;
+    std::cout<<"the read res is "<<valread<<"\t"<<errno<<std::endl;
     perror("???");
     std::cout<<"read from client "<<client<<"\t"<<buffer<<std::endl;
     std::stringstream ss;
@@ -44,12 +44,12 @@ void handleEvent(int fd)
     while( sendlen < n)
     {
       int valsend=handleErr(
-                      send(client,s.c_str(),n,0),
+                      send(client,s.c_str(),n,MSG_NOSIGNAL),
                       "send to client error");
       if( valsend > 0)sendlen += valsend;
-      else if( valsend == 0 || errno == 32)
+      else if(errno == 32)
       {
-        std::cout<<"client "<<client<<"closed"<<std::endl;
+        std::cout<<valsend<<" client "<<client<<"closed"<<errno<<std::endl;
         break;
       }
       else if( errno == EWOULDBLOCK)
