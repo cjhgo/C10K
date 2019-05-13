@@ -79,9 +79,12 @@ connect这一步没必要使用nonblock,握手链接有必要等待,这个时候
 从一个文件描述符中读取内容
 `ssize_t read(int fd, void *buf, size_t count);`
 从fd中尝试读取count个byte到buf中,返回实际读取了多少byte
+**如果返回0则说明读到了文件的eof,对于一个套接字则表明peer close事件**
 这个系统调用也会体现网络io是否阻塞.
 当fd这个套接字目前没有消息到来的时候,
 如果fd这个套接字是阻塞的调用会一直等待,如果是非阻塞的会返回`EAGAIN or EWOULDBLOCK`
++ recv,
+从一个套接字中接收消息
 + write,
 向一个文件描述符写内容
 `ssize_t write(int fd, const void *buf, size_t count);`
@@ -90,13 +93,21 @@ connect这一步没必要使用nonblock,握手链接有必要等待,这个时候
 向一个套接字发送消息
 `ssize_t send(int sockfd, const void *buf, size_t len, int flags);
 `和write类似,但是专用于写socket,flags变量用于指定额外的选项,如果为0,等价于write
-**对于read来说block是等待peer发送数据,对于send/write来说block是等待缓冲区有空间**
-(缓冲区到底在哪里,是什么,就依赖于对os的理解了)
+如果向一个broken pipe(比如peer close)执行send写操作,写进程会被`SIGPIPE`信号term,
+同时errno设置为`EPIPE`.
+所以`如果不处理`SIGPIPE`信号,写的过程中client关闭会造成server被信号杀死`.
+有两种方法处理`SIGPIPE`信号,
+一种是在main中`signal(SIGPIPE, SIG_IGN);`,这种控制粒度是全局的.
+另一种是在flags中设置`MSG_NOSIGNAL`,这种控制只在这个send调用中生效.
 + socket编程流程
   1. 使用socket函数创建套接字
   2. server端:bind->listen->accept->send/receive
   3. client端:connect->send/receive
   
+
+
+**对于read/recv来说block是等待peer发送数据,对于send/write来说block是等待缓冲区有空间**
+(缓冲区到底在哪里,是什么,就依赖于对os的理解了)
 
 
 有两个环节体现阻塞与非阻塞
@@ -121,8 +132,8 @@ handleErr(
 第一步要获取flag,第二步才能设置,至于fcntl函数的详细理解,甚至于setsockopt中的level的概念,又是另一个话题了.
 
 #### 如何处理关闭的套接字
-signal(SIGPIPE, SIG_IGN);
-errno 32 broken pipe
++ 向一个closed socket进行写操作会发出`SIGPIPE`信号,并且设置errno为EPIPE
++ 从一个closed socket进行读操作会得到`eof`,0返回值
 
 ### epoll api
 `#include <sys/epoll.h>`
@@ -302,6 +313,27 @@ A tiny introduction to asynchronous IO
 http://www.wangafu.net/~nickm/libevent-book/01_intro.html
 http://www.wangafu.net/~nickm/libevent-2.1/doxygen/html/
 
+### 异步编程
+协程如何取代callback
+```py
+from tornado.concurrent import Future
+
+@gen.coroutine
+def async_fetch_gen(url):
+    http_client = AsyncHTTPClient()
+    response = yield http_client.fetch(url)
+    raise gen.Return(response.body)
+
+
+def async_fetch_manual(url):
+    http_client = AsyncHTTPClient()
+    my_future = Future()
+    fetch_future = http_client.fetch(url)
+    def on_fetch(f):
+        my_future.set_result(f.result().body)
+    fetch_future.add_done_callback(on_fetch)
+    return my_future
+```
 
 ### 参考资料
 
