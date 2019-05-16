@@ -1,0 +1,8 @@
+
+
+这个部分的代码演示通过fiber在一个线程内并发地处理多个clinet socket的功能.
+程序会为每个进来的client socket启动一个fiber,
+当某个client socket阻塞的时候,通过手动切换当前线程的上下文到另一个fiber程序实现了单线程并发处理多客户端的能力.
+
+具体实现的时候,要考虑fiber如何存放,不同的fiber如何调度的问题.
+
