@@ -1,4 +1,6 @@
 #include <string>
+#include <vector>
+#include <algorithm>
 #include <sstream>
 #include <signal.h>
 #include "util.hpp"
@@ -6,10 +8,11 @@
 #include "fiber/fiber_group.h"
 #include "fiber/fiber_control.h"
 #define MAXEVENTS 100
-#define PORT 8899
+#define PORT 8901
 
 int server, epollfd;
 Fiber_group fg;
+std::vector<int> rfds;
 
 
 
@@ -47,15 +50,17 @@ void handleClient(int fd)
     }
     while (true)
     {
+      if(std::find(rfds.begin(),rfds.end(), fd) == rfds.end())
+      {
+        Fiber_Control::yield();
+      }
       char buffer[20]{0};
-      int valread = handleErr(
-                read(fd, buffer, 20),
-                "read from client error");
+      int valread = handleErr(read(fd, buffer, 20),"read from client error");
       std::cout<<"from client"<<fd<<" read "<<buffer<<"\t"<<valread<<"\t"<<errno<<std::endl;
       // if( valread == -1 && (errno == EWOULDBLOCK || errno == EAGAIN) )
       if( valread == -1 )
       {
-        usleep(2000*1000);
+        // usleep(2000*1000);
         Fiber_Control::yield();
       }else if( valread == 0)
       {
@@ -93,15 +98,9 @@ void handleAccept(int fd)
 }
 
 
-
-int main(int argc, char const *argv[])
+void ioloop()
 {
-
   struct epoll_event ev, events[MAXEVENTS];
-  Server s(PORT);
-  s.Run();
-  
-  server = s.getFd();  
   epollfd = epoll_create(1);
   handleErr(epollfd, "epoll create error");
   ev.events = EPOLLIN;
@@ -118,15 +117,31 @@ int main(int argc, char const *argv[])
             epoll_wait(epollfd, events, MAXEVENTS, -1), 
             "epoll wait error");
     std::cout<<"get ready in events number:"<<nfds<<std::endl;
+    rfds.clear();
     for(int i = 0; i < nfds; i++)
     {
       auto e = events[i];      
       if(e.data.fd == server)
       {
         handleAccept(e.data.fd);
-      }      
+      }else
+      {
+        rfds.push_back(e.data.fd);
+      }
     }
+    Fiber_Control::yield();
   }      
+}
+
+int main(int argc, char const *argv[])
+{
+
+  
+  Server s(PORT);
+  s.Run();
+  
+  server = s.getFd();  
+  fg.launch(ioloop);
   fg.join();
   return 0;
 }
