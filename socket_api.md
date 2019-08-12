@@ -1,7 +1,5 @@
 [toc]
 
-## C10K
-
 ### c/c++ socket api
 包含头文件
 ```c
@@ -53,7 +51,8 @@
 + listen,
 在套接字上启动监听链接
 `int listen(int sockfd, int backlog);`
-使sockfd这个服务端套接字处于主动的监听状态,backlog指定允许多少个套接字等待被accept
+使sockfd这个服务端套接字处于主动的监听状态,
+backlog指定指定了由内核代为accept的socket缓冲的数量,超过backlog之后新进来的clinet socket都被拒绝
 返回值0表示调用成功,-1表示调用失败
 + accept,
 从监听状态的sockfd套接字上接受一个来自client的链接
@@ -303,68 +302,3 @@ int epoll_pwait(int epfd, struct epoll_event *events,
 tions.  (Suppose the signal handler sets a global flag and returns.  Then a test of this global flag followed by a call of select() could hang indefinitely if the  signal  arrived
 just after the test but just before the call.  By contrast, pselect() allows one to first block signals, handle the signals that have come in, then call pselect() with the desired
 sigmask, avoiding the race.)
-### libevent
-libevent , 异步io?
-
-libevent提供了一个跨平台可移植的轮询操作api.
-select太低效,linux上有epoll,BSD上有kqueue.
-
-A tiny introduction to asynchronous IO
-http://www.wangafu.net/~nickm/libevent-book/01_intro.html
-http://www.wangafu.net/~nickm/libevent-2.1/doxygen/html/
-
-### 异步编程
-协程如何取代callback
-```py
-from tornado.concurrent import Future
-
-@gen.coroutine
-def async_fetch_gen(url):
-    http_client = AsyncHTTPClient()
-    response = yield http_client.fetch(url)
-    raise gen.Return(response.body)
-
-
-def async_fetch_manual(url):
-    http_client = AsyncHTTPClient()
-    my_future = Future()
-    fetch_future = http_client.fetch(url)
-    def on_fetch(f):
-        my_future.set_result(f.result().body)
-    fetch_future.add_done_callback(on_fetch)
-    return my_future
-```
-
-### 参考资料
-
-https://idea.popcount.org/2017-02-20-epoll-is-fundamentally-broken-12/
-https://idea.popcount.org/2017-03-20-epoll-is-fundamentally-broken-22/
-
-http://www.kegel.com/c10k.html
-
-
-unix 网络编程 卷1 套接字编程 在线版本
-http://www.masterraghu.com/subjects/np/introduction/unix_network_programming_v1.3/toc.html
-
-
-一份100页的套接字编程介绍材料,相较于史蒂文斯的900页的教材,这个算精简的
-http://beej.us/guide/bgnet/pdf/bgnet_A4.pdf
-https://www.gta.ufrj.br/ensino/eel878/sockets/index.html
-http://beej.us/guide/bgnet/html/single/bgnet.html
-
-
-
-
-
-
-
-操作系统缓冲区
-
-when send block
-operating system buffer nic
-操作系统 缓冲区
-operating system buffer
-socket buffer
-
-https://stackoverflow.com/questions/30429002/when-would-a-blocking-socket-send-block-udp
-https://eklitzke.org/how-tcp-sockets-work
