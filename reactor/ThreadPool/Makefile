@@ -1,0 +1,1 @@
+g++ main.cpp ThreadPool.cpp -std=c++11 -lpthread -g
