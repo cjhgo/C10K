@@ -103,9 +103,28 @@ connect这一步没必要使用nonblock,握手链接有必要等待,这个时候
   2. server端:bind->listen->accept->send/receive
   3. client端:connect->send/receive
   
+#### socket阻塞在哪里
+要想理解非阻塞之后,socket的读写行为,首先要明白
+socket什么情况下会阻塞?
+对于读操作,socket会一直阻塞直到缓冲区中有数据
+如果网络拥塞,或者对方没有消息,
+那么缓冲区中就没有数据,
+socket的读操作就要一直等
+对于写操作,socket会一直阻塞直到缓冲区中有空间
+如果网络拥塞,收不到ack或者发的太快,缓冲区被填满然后对方来不及收,
+那么缓冲区就会满,
+socket的写操作就要一直等
+所以,**socket读写是阻塞在缓冲区上的**
+而不是阻塞在对方的读/写上,只不过对方的读写会改变缓冲区的状态.
+毕竟,socket并没有办法知道对方是否读写了,只观察到了socket缓存区的变化.
+以及,无论是阻塞的写操作还是非阻塞的写操作,都有可能出现没写完的情况
+只不过对于阻塞的写操作,可以用while循环把消息一直写完,
+对于非阻塞的写操作,要配合epoll等待下一次epollout的发生才能接着写.
 
-
+>所以,我原来的这个理解,就显得不太精确了.
 **对于read/recv来说block是等待peer发送数据,对于send/write来说block是等待缓冲区有空间**
+socket读写是阻塞在缓冲区上的,而不是对方进行了读写.
+也许对方没有读写,只是之前的消息经过拥塞的网络现在可读写了.
 (缓冲区到底在哪里,是什么,就依赖于对os的理解了)
 
 
@@ -163,8 +182,8 @@ op操作包括:
     };
     ```
     events可取的值为:
-    EPOLLIN,fd可以read
-    EPOLLOUT,fd可以write
+    EPOLLIN,fd可以从缓冲区中读数据了
+    EPOLLOUT,fd可以向缓冲区中写数据了
     EPOLLRDHUP/EPOLLPRI/...
 3. 使用`epoll_wait`等待感兴趣的事件发生
 `int epoll_wait(int epfd, struct epoll_event *events,int maxevents, int timeout);`
@@ -176,32 +195,125 @@ linux在`/proc/sys/fs/epoll/max_user_watches`指定了系统中一个user启动�
 
 在`/proc/[pid]/fdinfo`中可以看到一个进程的epoll set中的文件描述符
 
-#### 边缘触发和水平触发
-epoll的事件分发接口提供边缘触发(edge-triggered,et)和水平触发(level-triggered,lt)两种机制,它们的区别可以在下边的例子场景中体现出来:
+#### 边缘触发和水平触发,区别,及使用原则
+epoll的事件分发接口提供边缘触发(edge-triggered,et)和水平触发(level-triggered,lt)两种机制,设置方法如下
+```c
+ev.events = EPOLLIN|EPOLLOUT;//默认水平触发
+ev.events = EPOLLIN|EPOLLOUT|EPOLLET;//设置为边缘触发
+```
+>The events member is a bit mask composed using the following available event types:
 
+ev.events是一个bit掩码字段,默认采用水平触发模式,通过`EPOLLET`可以设置为边缘触发模式.
+也就是说水平触发是epoll的默认模式,不需要专门设置,并没有`epolllt`这个选项.
+以及,**这个模式是设置在fd上对整个fd生效的**,不存在说分别设置,让读事件水平触发,写事件边缘触发.
+
+在level-trigger(水平触发)模式模式下,只要文件描述符可读或可写,epoll实例就会分发相应的事件,这种情况下的epoll相当于一个更高效的poll.
+(也就是说epoll相对于poll提供了et模式).
+在edge-triggered(边缘触发)模式下,epoll实例只在监听的文件描述符**状态发生改变的时候**(从不可读变成可读)发出一次通知.
+>Edge vs level triggered refers to how a change in an fd's state is reflected in userspace: level triggering will cause repeated wakeups while the condition remains true, whereas edge triggering will cause exactly one, until the monitored state flips from true to false and back again.
+
+什么意思呢,这个图可以比较直观的表达一下:
+![触发比较](images/trigger.png)
+
+可以看到,
++ 对于epollout事件,只要写缓冲区不满,那么都是可写的,
+如果采用边缘触发,只在写缓冲区状态从不可写变(满)为可写(不满)的时刻报告一次
+如果采用水平触发,只要写缓冲区不满,epoll_wait就立即返回报告可写事件
+*但是我们可能并不关系或不需要往缓冲区里写*
+比如,平时写缓冲区是有空间的,但是程序并不需要发消息,水平触发还是会报告epollout
++ 对于epollin事件,只要读缓冲区非空,那么都是可读的
+如果采用水平触发,只要读缓冲区非空,epoll_wait就立即返回报告可读事件
+如果采用边缘触发,只在读缓冲区从不可读(空)变为可读(非空)的时候报告一次
+那么如果一次没读完,剩下的数据并不再次触发epollin事件
+
+
+也就是说
+>When using epoll with level triggered notifications, 
+you will get constant EPOLLOUT notifications on a socket 
+except for those brief periods of time that the output buffer for the socket is actually full. 
+The impact of this is that your event loop will wake up 
+even if you have nothing to send, and there was no data to receive either.
+
+使用水平触发,会一直报告不必要的epollout可写事件
+使用边缘触发,一次没读完的数据不会再次触发epollin可读事件
+或者说,问题在于
+对于读缓冲区我们希望有数据就读,关注可读的状态
+对于写缓存区我们只关系它从满变成不满,可写了,关注状态变化
+
+
+man epoll中举了这个例子,来说明边缘触发
+
+<blockquote>
+1. The file descriptor that represents the read side of a pipe (rfd) is registered on the epoll instance. <br>
+2. A pipe writer writes 2 kB of data on the write side of the pipe.<br>
+3. A call to epoll_wait(2) is done that will return rfd as a ready file descriptor.<br>
+4. The pipe reader reads 1 kB of data from rfd.<br>
+5. A call to epoll_wait(2) is done.<br>
+<br>
+If  the  rfd file descriptor has been added to the epoll interface using the EPOLLET (edge-triggered) flag, the call to epoll_wait(2) done in step 5 will probably hang despite the
+available data still present in the file input buffer; meanwhile the remote peer might be expecting a response based on the data it already sent.  The  reason  for  this  is  that
+edge-triggered  mode delivers events only when changes occur on the monitored file descriptor.  So, in step 5 the caller might end up waiting for some data that is already present
+inside the input buffer.  In the above example, an event on rfd will be generated because of the write done in 2 and the event is consumed in 3.  Since the read operation done  in
+4 does not consume the whole buffer data, the call to epoll_wait(2) done in step 5 might block indefinitely.<br>
+<br>
+An application that employs the EPOLLET flag should use nonblocking file descriptors to avoid having a blocking read or write starve a task that is handling multiple file descrip‐
+tors.  The suggested way to use epoll as an edge-triggered (EPOLLET) interface is as follows:
+</blockquote>
 1. epoll实例中注册了用于read的一个文件描述符,rfd
 2. 另一端向rfd中写入了2kb的数据
 3. epoll_wait调用结束返回一个可读的rfd
 4. 程序从rfd中读去了1kb的数据(还有1kb数据没读取)
 5. 再次调用epoll_wait,等待剩余的1kb数据
 
-在edge-triggered模式下,epoll实例只在监听的文件描述符**状态发生改变的时候**(从不可读变成可读)发出一次通知.
-因此在第5步中,尽管剩余的1kb数据已经送达,但是epoll实例不会再次返回可读事件,同时另一端也在等待自己读完所有的2kb数据,
+如果向epoll中添加rfd的时候,设置了epollet标志位,让epoll对rfd的可读事件按照边缘触发模式来报告,
+在第5步中,尽管剩余的1kb数据已经送达,但是epoll实例不会再次返回可读事件,同时另一端也在等待自己读完所有的2kb数据,
 那么这个步骤5中的epoll_wait就会一直等待下去(hang).
 即边缘触发模式只在状态边缘通知一次事件,read消费了这次事件后如果没有读完所有的内容,那么后来的epoll_wait就block indefinitely.
+使用边缘触发模式的时候,应用程序应该使用非阻塞的文件描述符,因为阻塞的文件描述符读写的时候会使应用程序产生饥饿现象.
 
-使用边缘触发模式的时候,应用程序应该使用非阻塞的文件描述符,因为阻塞的文件描述符读写的时候会使应用程序产生饥饿现象,详见后边.
+为了避免这一点,边缘触发模式下,读操作要一直进行直到返回EAGIN,清空读缓冲区
+否则剩下的消息会影响后续消息的接收,造成饥饿现象.
+而`read until EAGAIN`这个操作只有非阻塞套接字才有可能
+所以,**边缘触发必须要配合非阻塞套接字来使用**
+而对于*水平触发模式,则使用阻塞套接字也可以*
+因为阻塞套接字虽然读写会阻塞,
+但是由于<U>是收到了epoll返回的事件才进行读写的</U>
+所以,实际进行读写的时候,阻塞套接字并不会阻塞,可以直接读写
+再加上没读完的数据epoll会再次报告,就不会有上边的问题.
+但是确实存在一种可能,虽然epoll返回了可读事件,但是tcp又把数据丢掉了(比如校验失败?)
+这时,水平触发下也不适合用阻塞套接字了.
+
+所以,用了epoll这种多路复用,当然就应该相应地配套使用非阻塞套接字.
+额外指出**边缘触发必须要配合非阻塞套接字来使用**这一点其实意在强调
+边缘触发时,读操作一定要把读缓冲区中的数据读空才不影响后续的数据.
+
+
+
+那么,网络程序该怎样合理的使用这两种模式呢?
+
 具体而言,规则如下
 1. 使用非阻塞的文件描述符
 2. 只在发生EAGAIN的情况下等待事件
 (发生eagain说明读完了缓冲中的数据,上边例子中发了2kb,读了1kb就不会返回eagain)
+    - 使用默认的水平触发,然后只在eagain的情况下add epollout事件
+    发送完毕之后,从epollset中remove掉epollout事件
+      >Disable EPOLLOUT until those times you actually get EWOULDBLOCK / EAGAIN. At that point, you enable EPOLLOUT, and disable it again once your send is complete
+    - 使用边缘触发,自己处理好一次读不完,那么直到读缓冲区空了才再次触发epollin事件的情况(read until eagain)
+      >Enable edge triggered notifications, and leave EPOLLOUT enabled all the time. Now, you will only get EPOLLOUT notifications when the system changes from a output buffer full state to non-full state. However, EPOLLIN is now also also edge triggered, which means you only get one EPOLLIN notification until you drain the input buffer.
+3. 总结一下的话,推荐使用边缘触发模式,然后对于读操作,要一直读直到返回了EAGAIN,那么就不会出现没读完进而饥饿现象了.
 
+参考这两篇文章
+https://stackoverflow.com/a/51757553
+epoll：EPOLLLT和EPOLLET的区别
+https://blog.csdn.net/daiyudong2020/article/details/50439029
 
-水平触发模式下,只要文件描述符可读或可写,epoll实例就会分发相应的事件,这种情况下的epoll相当于一个更高效的poll.
-(也就是说epoll相对于poll提供了et模式).
 
 
 epoll提供了`EPOLLONESHOT`事件,使得某个文件描述符被通知一次后内部后续就不再提供通知,程序员自己要再次调用EPOLL_CTL_MOD来启用通知.
+
+如何验证这两种触发模式?
+
+
 
 #### epoll Q&A
 0. Q:epoll set中用什么来区分程序注册进来的文件描述符?
@@ -242,6 +354,9 @@ epoll报告了可读事件,但是由于校验失败,数据被丢弃了,此时去
 + 使用event cache时容易出现的问题
 If  you use an event cache or store all the file descriptors returned from epoll_wait(2), 
 then make sure to provide a way to mark its closure dynamically (i.e., caused by a previous event's processing)
+
+#### io多路复用是什么
+https://www.zhihu.com/question/28594409/answer/295638973
 
 ### 其他多路复用,poll/select/ppoll/ppselect
 除了epoll之外,linux还提供了poll/select用于多路复用
@@ -302,3 +417,41 @@ int epoll_pwait(int epfd, struct epoll_event *events,
 tions.  (Suppose the signal handler sets a global flag and returns.  Then a test of this global flag followed by a call of select() could hang indefinitely if the  signal  arrived
 just after the test but just before the call.  By contrast, pselect() allows one to first block signals, handle the signals that have come in, then call pselect() with the desired
 sigmask, avoiding the race.)
+
+
+
+### FAQ
+socket low-water mark
+What's the purpose of the socket option SO_SNDLOWAT
+https://stackoverflow.com/questions/8245937/whats-the-purpose-of-the-socket-option-so-sndlowat
+
+
+怎样用非阻塞socket 发生文件等大数据量的消息
+即非阻塞socket怎么处理一次发不完的数据?
+nonblock socket send file
+非阻塞 大量数据传输
+
+https://bbs.csdn.net/topics/380167545
+
+非阻塞 大数据量
+
+https://www.cnblogs.com/xiohao/p/4385508.html
+
+
+http://www.169it.com/tech-qa-linux/article-12711598179030876197.html
+
+socket send big data
+
+https://stackoverflow.com/questions/12912599/sending-large-data-via-socket
+
+https://stackoverflow.com/questions/1577825/unix-sockets-how-to-send-really-big-data-with-one-send-call?rq=1
+
+nonblock socket send large data
+
+https://stackoverflow.com/questions/39991227/tcp-socket-multiplexing-send-large-data
+
+
+socket 如何优雅关闭
+shutdown vs close
+graceful shutdown socket
+产生了大量的time_wait/close_wait ,怎么办?怎么发现?
