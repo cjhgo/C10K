@@ -34,11 +34,17 @@ class TcpConnection:public std::enable_shared_from_this<TcpConnection>
   void setMessageCallback(const MessageCallback& cb){ messagecb_ = cb;}
   void setConnectionCallback(const ConnectionCallback& cb){ concb_ = cb;}
   
+  void setCloseCallback(const CloseCallback& cb){ closecb_ = cb;}
   void connectEstablished();
+  void connectDestroyed();
  private:
-  enum StateE { kConnecting, kConnected,};
+  enum StateE { kConnecting, kConnected, kDisconnected,};
+
   void setState(StateE s) { state_ = s;}
   void handleRead();  
+  void handleWrite();
+  void handleClose();
+  void handleError();
 
   EventLoop* loop_;
   std::string name_;
@@ -50,8 +56,9 @@ class TcpConnection:public std::enable_shared_from_this<TcpConnection>
   std::shared_ptr<Socket> socket_;
   InetAddress localAddr_;
   InetAddress peerAddr_;
-  ConnectionCallback concb_;
+  ConnectionCallback concb_;//及处理连接建立也处理连接断开
   MessageCallback messagecb_;
+  CloseCallback closecb_;
 };
 
 

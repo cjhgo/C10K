@@ -43,6 +43,7 @@ void readTimerfd(int timerfd, Timestamp now)
 {
   uint64_t howmany;
   ssize_t n = ::read(timerfd, &howmany, sizeof howmany);
+  LOG_INFO<<"read from timerfd res: "<<n<<"\t"<<howmany<<"\n";
   if( n != sizeof howmany)
   {
     LOG_DEBUG<<"read from timer fd error! "<<n<<"\n";

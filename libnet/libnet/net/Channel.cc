@@ -2,6 +2,7 @@
 #include "libnet/net/EventLoop.h"
 #include "libnet/base/logger.h"
 #include <poll.h>
+#include <assert.h>
 
 using namespace libnet;
 const int Channel::kNoneEvent = 0;
@@ -11,9 +12,15 @@ const int Channel::kWriteEvent = POLLOUT;
 
 
 Channel::Channel(EventLoop* loop, int fdArg)
-  :loop_(loop),fd_(fdArg),events_(0),revents_(0),index_(-1)
+  :loop_(loop),fd_(fdArg),events_(0),revents_(0),index_(-1),
+  eventHandling_(false)
 {
 
+}
+
+Channel::~Channel()
+{
+  assert(!eventHandling_);
 }
 
 void Channel::update()
@@ -24,6 +31,15 @@ void Channel::update()
 
 void Channel::handleEvent()
 {
+  eventHandling_ = true;
+  if(revents_ &(POLLHUP) && !(revents_ & POLLIN))
+  {
+    LOG_DEBUG<<"close events on fd"<<this->fd_<<"\n";
+    if(closeCallback)
+    {
+      closeCallback();
+    }
+  }
   if(revents_ & (POLLERR | POLLNVAL))
   {
     LOG_DEBUG<<"error events on fd "<<this->fd_<<"\n";
@@ -39,4 +55,5 @@ void Channel::handleEvent()
     LOG_DEBUG<<"out events on fd "<<this->fd_<<"\n";
     if(writeCallback) writeCallback();
   }
+  eventHandling_=false;
 }

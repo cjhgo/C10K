@@ -4,6 +4,7 @@
 #include <vector>
 #include <map>
 
+#include "libnet/net/EventLoop.h"
 #include "libnet/net/Channel.h"
 
 // struct polllfd;
@@ -26,7 +27,9 @@ class Poller
   //通过channel注册(fd,events)
   void updateChannel(Channel* channel);
 
-  void assertInLoopThread() { }
+  void removeChannel(Channel* channel);
+
+  void assertInLoopThread() {ownerLoop_->assertInLoopThread();}
  private:
   //把poll调用对pollfds_的修改填充到activechannels中
   void fillActiveChannel(int numEvents, 

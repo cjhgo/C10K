@@ -3,6 +3,7 @@
 #include <poll.h>
 #include <cassert>
 #include "libnet/base/logger.h"
+#include <algorithm>
 using namespace libnet;
 
 Poller::Poller(EventLoop* loop)
@@ -74,4 +75,28 @@ void Poller::updateChannel(Channel* channel)
       pfd.fd = -1;
     }    
   }
+}
+
+void Poller::removeChannel(Channel* channel)
+{
+  assertInLoopThread();
+  assert(channels_.find(channel->fd()) != channels_.end());
+  assert(channels_[channel->fd()] == channel);
+  int idx = channel->index();
+
+  size_t n = channels_.erase(channel->fd());
+  assert(n == 1);
+
+  if(idx == pollfds_.size()-1)
+  {
+    pollfds_.pop_back();
+  }else
+  {
+
+    int channelAtEnd = pollfds_.back().fd;
+    std::iter_swap(pollfds_.begin()+idx, pollfds_.end()-1);
+    channels_[channelAtEnd]->set_index(idx);
+    pollfds_.pop_back();
+  }
+  
 }

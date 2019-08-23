@@ -3,6 +3,7 @@
 #include "utils/Socket.h"
 #include "utils/InetAddress.h"
 #include "utils/SocketsOps.h"
+#include "libnet/base/logger.h"
 
 using namespace libnet;
 
@@ -34,7 +35,15 @@ void Acceptor::handleRead()
   int connfd = acceptSocket_.accept(&peerAddr);
   if( connfd > 0)
   {
-    if( nccb_) nccb_(connfd, peerAddr);
-    else sockets::close(connfd);
+    if( nccb_)
+    {
+      nccb_(connfd, peerAddr);
+      LOG_DEBUG<<"acceptor handle new connection\n";
+    }
+    else
+    {
+      sockets::close(connfd);
+      LOG_DEBUG<<"acceptor close new connection\n";
+    } 
   }
 }

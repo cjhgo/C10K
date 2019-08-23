@@ -4,6 +4,8 @@
 #include "EventLoop.h"
 #include "utils/SocketsOps.h"
 
+#include <assert.h>
+
 using namespace libnet;
 
 TcpServer::TcpServer(EventLoop* loop, const InetAddress& listenAddr)
@@ -28,9 +30,11 @@ void TcpServer::start()
   {
     started_ = true;
   }
-  // if( !acceptor_->listening)
+  if(!acceptor_->listening())
   {
-    // loop_->run
+    loop_->runInLoop(
+      std::bind(&Acceptor::listen, acceptor_)
+    );
   }
 }
 
@@ -49,7 +53,19 @@ void TcpServer::newConnection(int sockfd, const InetAddress& peerAddr)
   connections_[connName] = conn;
   conn->setConnectionCallback(conncb_);
   conn->setMessageCallback(messagecb_);
+  conn->setCloseCallback(std::bind(&TcpServer::removeConnection, this, std::placeholders::_1));
   conn->connectEstablished();
 
 }
 
+
+
+void TcpServer::removeConnection(const TcpConnectionPtr& conn)
+{
+  loop_->assertInLoopThread();
+  size_t n = connections_.erase(conn->name());
+  assert(n == 1);
+  loop_->queueInLoop(
+    std::bind(&TcpConnection::connectDestroyed, conn)
+  );
+}

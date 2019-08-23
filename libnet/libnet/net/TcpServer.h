@@ -22,7 +22,11 @@ class TcpServer
   void setMessageCallback(const MessageCallback& cb){ messagecb_ = cb;}
   void setConnectionCallback(const ConnectionCallback& cb){ conncb_ = cb;}
  private:
+  //处理新连接的建立,由acceptor.handleRead调用
   void newConnection(int sockfd, const InetAddress& peerAddr);
+
+  //从map中去除已经关闭的连接
+  void removeConnection(const TcpConnectionPtr& conn);
 
   typedef std::map<std::string, TcpConnectionPtr> ConnectionMap;
 

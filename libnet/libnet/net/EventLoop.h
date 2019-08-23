@@ -48,6 +48,8 @@ class EventLoop
 
   void updateChannel(Channel* channel);
 
+  void removeChannel(Channel* channel);
+
   bool isInLoopThread() const
   {
     return threadId_ == std::this_thread::get_id();
@@ -68,10 +70,11 @@ class EventLoop
   bool looping_; //处于ioloop
   bool quit_; //已经停止ioloop
 
-  typedef std::vector<Channel*> ChannelList;
   
   std::shared_ptr<Poller> poller_;
   std::shared_ptr<TimerQueue> timerQueue_;
+  
+  typedef std::vector<Channel*> ChannelList;
   ChannelList activeChannels_;
   const std::thread::id threadId_;// = std::this_thread::get_id();
   

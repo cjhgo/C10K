@@ -13,7 +13,8 @@ class Channel
   typedef std::function<void()> EventCallback;
 
   Channel(EventLoop* loop, int fd);
-
+  ~Channel();
+  
   void handleEvent();
   void setReadCallback(const EventCallback& cb)
   { readCallback = cb;}
@@ -21,6 +22,8 @@ class Channel
   { writeCallback = cb;}
   void setErrorCallback(const EventCallback& cb)
   { errorCallback = cb;}
+  void setCloseCallback(const EventCallback& cb)
+  { closeCallback = cb;}
 
   int fd()const {return fd_;}
   int events()const{return events_;}
@@ -67,9 +70,12 @@ class Channel
   int revents_;//记录poll返回的实际发生的事件,bit标志位
   int index_;//记录本channel在poll中的pfds中的位置下标
 
+  bool eventHandling_;
   EventCallback readCallback;
   EventCallback writeCallback;
   EventCallback errorCallback;
+  EventCallback closeCallback;
+  
 };
 }
 #endif
