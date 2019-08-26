@@ -98,6 +98,18 @@ connect这一步没必要使用nonblock,握手链接有必要等待,这个时候
 有两种方法处理`SIGPIPE`信号,
 一种是在main中`signal(SIGPIPE, SIG_IGN);`,这种控制粒度是全局的.
 另一种是在flags中设置`MSG_NOSIGNAL`,这种控制只在这个send调用中生效.
++ 关于scatter/gahter io:readv,writev,一次操作多个iovec
+  ```c
+  ssize_t readv(int fd, const struct iovec *iov, int iovcnt);
+  把从fd中读出的内容依次读到从iov地址处开始的iovcnt个iovec中
+  填充满第0个接着填充第1个
+  ssize_t writev(int fd, const struct iovec *iov, int iovcnt);
+  struct iovec {
+      void  *iov_base;    /* Starting address */
+      size_t iov_len;     /* Number of bytes to transfer */
+  };
+  从iov地址开始处依次读取iovcnt个iovec中的内容,写入到write中   
+  ```
 + socket编程流程
   1. 使用socket函数创建套接字
   2. server端:bind->listen->accept->send/receive
@@ -152,6 +164,29 @@ handleErr(
 #### 如何处理关闭的套接字
 + 向一个closed socket进行写操作会发出`SIGPIPE`信号,并且设置errno为EPIPE
 + 从一个closed socket进行读操作会得到`eof`,0返回值
+
+程序怎么检测到套接字关闭了呢
+>服务器端会收到EPOLLIN或EPOLLHUP事件，为了统一处理，可以在检测到EPOLLHUP时走与EPOLLIN相同的流程，这样上层会recv返回0，从而知道对端从容关闭<br>
+test for both POLLIN and POLLHUP, and rely on the subsequent read() to tell you whether you reached EOF.
+
+https://www.greenend.org.uk/rjk/tech/poll.html
+
+pollin&read 0 或者 pollhup
+然后走相同的流程
+
+
+### 从网线到网卡到socket,tcp/ip栈是怎样工作的
+Understanding Linux Network Internals
+
+https://www.linuxjournal.com/content/queueing-linux-network-stack
+
+https://www.cubrid.org/blog/understanding-tcp-ip-network-stack
+
+https://www2.cs.duke.edu/ari/trapeze/freenix/node6.html
+
+https://eklitzke.org/how-tcp-sockets-work
+从网卡复制到kernel
+从kernel复制到user space
 
 ### epoll api
 `#include <sys/epoll.h>`
@@ -234,8 +269,8 @@ except for those brief periods of time that the output buffer for the socket is 
 The impact of this is that your event loop will wake up 
 even if you have nothing to send, and there was no data to receive either.
 
-使用水平触发,会一直报告不必要的epollout可写事件
-使用边缘触发,一次没读完的数据不会再次触发epollin可读事件
+使用水平触发,会一直报告不必要的epollout可写事件,这个叫做`不必要的wake up` 
+使用边缘触发,一次没读完的数据不会再次触发epollin可读事件,这个叫做 `饥饿`
 或者说,问题在于
 对于读缓冲区我们希望有数据就读,关注可读的状态
 对于写缓存区我们只关系它从满变成不满,可写了,关注状态变化
@@ -269,7 +304,7 @@ tors.  The suggested way to use epoll as an edge-triggered (EPOLLET) interface i
 在第5步中,尽管剩余的1kb数据已经送达,但是epoll实例不会再次返回可读事件,同时另一端也在等待自己读完所有的2kb数据,\
 那么这个步骤5中的epoll_wait就会一直等待下去(hang).\
 即边缘触发模式只在状态边缘通知一次事件,read消费了这次事件后如果没有读完所有的内容,那么后来的epoll_wait就block indefinitely.\
-使用边缘触发模式的时候,应用程序应该使用非阻塞的文件描述符,因为阻塞的文件描述符读写的时候会使应用程序产生饥饿现象.\
+使用边缘触发模式的时候,应用程序应该使用非阻塞的文件描述符,因为阻塞的文件描述符读写的时候会使应用程序产生饥饿现象.
 
 为了避免这一点,边缘触发模式下,读操作要一直进行直到返回EAGIN,清空读缓冲区\
 否则剩下的消息会影响后续消息的接收,造成饥饿现象.\
@@ -285,25 +320,36 @@ tors.  The suggested way to use epoll as an edge-triggered (EPOLLET) interface i
 
 所以,用了epoll这种多路复用,当然就应该相应地配套使用非阻塞套接字.\
 额外指出**边缘触发必须要配合非阻塞套接字来使用**这一点其实意在强调\
-边缘触发时,读操作一定要把读缓冲区中的数据读空才不影响后续的数据.\
+边缘触发时,读操作一定要把读缓冲区中的数据读空才不影响后续的数据.
 
 
 
 那么,网络程序该怎样合理的使用这两种模式呢?
 
-具体而言,规则如下
+具体而言,
+使用边缘触发的规则如下,处理好可读只触发一次这个情况
 1. 使用非阻塞的文件描述符
 2. 只在发生EAGAIN的情况下等待事件
 (发生eagain说明读完了缓冲中的数据,上边例子中发了2kb,读了1kb就不会返回eagain)
-    - 使用默认的水平触发,然后只在eagain的情况下add epollout事件
-    发送完毕之后,从epollset中remove掉epollout事件
-      >Disable EPOLLOUT until those times you actually get EWOULDBLOCK / EAGAIN. At that point, you enable EPOLLOUT, and disable it again once your send is complete
-    - 使用边缘触发,自己处理好一次读不完,那么直到读缓冲区空了才再次触发epollin事件的情况(read until eagain)
-      >Enable edge triggered notifications, and leave EPOLLOUT enabled all the time. Now, you will only get EPOLLOUT notifications when the system changes from a output buffer full state to non-full state. However, EPOLLIN is now also also edge triggered, which means you only get one EPOLLIN notification until you drain the input buffer.
+自己处理好一次读不完,那么直到读缓冲区空了才再次触发epollin事件的情况(read until eagain)
+    >Enable edge triggered notifications, and leave EPOLLOUT enabled all the time. Now, you will only get EPOLLOUT notifications when the system changes from a output buffer full state to non-full state. However, EPOLLIN is now also also edge triggered, which means you only get one EPOLLIN notification until you drain the input buffer(by read until EAGAIN).
 3. 总结一下的话,推荐使用边缘触发模式,然后对于读操作,要一直读直到返回了EAGAIN,那么就不会出现没读完进而饥饿现象了.
+
+如果使用默认的水平触发,
+>epoll is simply a faster poll
+
+不过,要处理好一直报告epollout这个情况
+只在eagain的情况下add epollout事件
+发送完毕之后,从epollset中remove掉epollout事件
+>Disable EPOLLOUT until those times you actually get EWOULDBLOCK / EAGAIN. At that point, you enable EPOLLOUT, and disable it again once your send is complete
+
+
+对于server fd,由于只关心可读的accept,没有epollout事件,用默认的水平触发进行了
+对于client fd,既关系可读事件,又关心可写事件,用边缘触发+非阻塞+read_until_eagain吧
 
 参考这两篇文章
 https://stackoverflow.com/a/51757553
+
 epoll：EPOLLLT和EPOLLET的区别
 https://blog.csdn.net/daiyudong2020/article/details/50439029
 
@@ -312,7 +358,12 @@ https://blog.csdn.net/daiyudong2020/article/details/50439029
 epoll提供了`EPOLLONESHOT`事件,使得某个文件描述符被通知一次后内部后续就不再提供通知,程序员自己要再次调用EPOLL_CTL_MOD来启用通知.
 
 如何验证这两种触发模式?
-()
+(水平/边缘触发)x(阻塞/非阻塞)x(server fd/client fd)
+https://blog.csdn.net/liu0808/article/details/52980413
+
+主要是验证,
+边缘触发下,一次没读完,后续消息不通知的情形
+水平触发下,一直报告epollout事件的情形
 
 
 #### epoll Q&A
@@ -355,8 +406,7 @@ epoll报告了可读事件,但是由于校验失败,数据被丢弃了,此时去
 If  you use an event cache or store all the file descriptors returned from epoll_wait(2), 
 then make sure to provide a way to mark its closure dynamically (i.e., caused by a previous event's processing)
 
-#### io多路复用是什么
-https://www.zhihu.com/question/28594409/answer/295638973
+
 
 ### 其他多路复用,poll/select/ppoll/ppselect
 除了epoll之外,linux还提供了poll/select用于多路复用
@@ -418,6 +468,66 @@ tions.  (Suppose the signal handler sets a global flag and returns.  Then a test
 just after the test but just before the call.  By contrast, pselect() allows one to first block signals, handle the signals that have come in, then call pselect() with the desired
 sigmask, avoiding the race.)
 
+### (select/poll/epoll)这些io多路复用是怎么实现的
+https://www.zhihu.com/question/28594409/answer/295638973
+
+
+select是怎么实现的
+
+
+
+epoll是怎么实现的
+
+
+使用epoll要先通过epoll_create创建一个epfd
+这个epfd对应着系统内核中的以文件
+它有一个结构体`struct eventpoll`,这个结构体
+记录了用户通过epoll_ctl调用放进来的socket fd
+记录了调用它的进程列表(一个epfd可以被多个进程epoll_wait)
+记录了注册的socket fd中活跃的部分
+
+
+https://medium.com/@copyconstruct/the-method-to-epolls-madness-d9d2d6378642
+https://idea.popcount.org/2017-02-20-epoll-is-fundamentally-broken-12/
+
+### select/poll/epoll之间的比较
+https://www.cnblogs.com/aspirant/p/9166944.html
+socket有一个等待列表
+对于select这种方式
+每次调用,都要讲进程放入到socket的等待列表
+调用结束的时候,把进程从socket的等待列表中取出来
+程序员要再次遍历fdset,用fdisset来判断socket是否可以操作了
+
+每次调用select，都需要把fd集合从用户态拷贝到内核态，这个开销在fd很多时会很大（因为在内核才能监听那些数据，也就是操作文件描述符的读写）
+
+同时每次调用select都需要在内核遍历传递进来的所有fd，这个开销在fd很多时也很大
+
+select支持的文件描述符数量太小了，默认是1024
+
+ epoll既然是对select和pol的改进,就应该能避免上述的三个缺点。那epoll都是怎么解决的呢?在此之前,我们先看一下epoll和select和poll的调用接口上的不同, select和poll都只提供了一个函数select或者poll函数。 而epoll提供了三个函数, epoll create,epoll cti和epoll wait , epoll create是创建一个epol句柄 ; epoll ctl是注册要监听的事件类型; epoll wait则是等待事件的产生。
+
+对于第一-个缺点, epoll的解决方案在epoll ctl函数中。每次注册新的事件到epoll句柄中时(在epoll ctI中指定EPOLL CTL ADD) ,会把所有的fd拷贝进内核,而不是在epoll wait的时候重复拷贝。epoll保证 了每个fd在整个过程中只会拷贝一次。
+
+对于第二个缺点, epoll的解决方案不像select或poll- -样每次都把current轮流加入fd对应的设备等待队列中,而只在epoll ctl时把current挂一遍(这一遍必不可少)并为每个fd指定一-个回调函数 ,当设备就绪,唤醒等待队列上的等待者时,就会调用这个回调函数,而这个回调函数会把就绪的fd加入-一个就绪链表)。epoll wait的工作实际上就是在这个就绪链表中查看有没有就绪的fd (利用schedule_ timeout0实现睡一会,判断一会的效果 ,和select实现中的第7步是类似的)。
+
+对于第三个缺点, epoll没有这个限制，它所支持的FD上限是最大可以打开文件的数目, 这个数字-般远大于2048,举个例子，在1GB内存的机器上大约是10万左右,具体数目可以cat /proc/sys/fs/file-max察看,一般来说这个数品和系统内存关系很大。
+
+
+epoll和select/poll不一样
+这一点在操作使用流程上就能体现出来
+使用select/poll,每次都要
+使用epoll,只在epoll_create的时候操作相关的等待队列
+
+epoll额外创建了一个文件描述符,efd,然后把epf放入到socket的等待列表
+把进程放入到efd的等待列表
+即在进程和进程等待的socket fd之间加了一层
+然后epoll_wait调用返回的时候,直接返回可用的socket fd
+
+
+epoll大体实现
+
+
+但是,epoll比select/poll更快这一点并不是绝对的
 
 
 ### FAQ
