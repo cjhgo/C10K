@@ -1,9 +1,30 @@
 
+/**
+ * eventloop的执行逻辑
+ */
 
 
 
+/** 注册event */
 
-/*执行io loop */
+channel.(enableReading/enableWriing/disableWrting/disableAll)
+{
+  set event
+  update()
+  [//Channel::update
+    loop->updateChannel(this);
+    [//EventLoop::updateChannel(Channel*)
+      poller->updateChannel(channel)
+      [//Poller::updateChannel(Channel*)
+        pollfds.push_back(chanel->fd)
+        channel->set_index()
+        channels[fd]=channel
+      ]
+    ]
+  ]
+}
+
+/**执行io loop */
 loop.loop()
 {//EventLoop::loop
   while (!quit)
@@ -13,7 +34,7 @@ loop.loop()
     [//Poller::poll
       int nume = ::poll(fds, nfds,timeout)
       fillActiveChannel(nume, activechannels)
-      {//Poller::fillActiveChannels
+      [//Poller::fillActiveChannels
         for pfd : pfds
         {
           if( pfd.revent)
@@ -24,7 +45,7 @@ loop.loop()
           }
 
         }
-      }
+      ]
     ]
     /*处理活跃的channel*/
     for channel : activechannels
