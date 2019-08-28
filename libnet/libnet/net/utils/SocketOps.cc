@@ -70,6 +70,11 @@ namespace sockets
     handleErr(res);
   }
 
+  void shutdownWrite(int sockfd)
+  {
+    int res = ::shutdown(sockfd,SHUT_WR);
+    handleErr(res);
+  }
   void toHostPort(char* buf, size_t size,
                 const struct sockaddr_in& addr)
   {

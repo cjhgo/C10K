@@ -25,7 +25,7 @@ void print(const char* msg)
 
 int main(int argc, char const *argv[])
 {
-  Logger::instance().setLogLevel(NONE);
+  Logger::instance().setLogLevel(INFO);
   EventLoop loop;
   g_loop = &loop;
 

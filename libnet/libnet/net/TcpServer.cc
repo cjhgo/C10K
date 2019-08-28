@@ -2,6 +2,7 @@
 #include "TcpServer.h"
 #include "Acceptor.h"
 #include "EventLoop.h"
+#include "EventLoopThreadPool.h"
 #include "utils/SocketsOps.h"
 
 #include <assert.h>
@@ -12,6 +13,7 @@ TcpServer::TcpServer(EventLoop* loop, const InetAddress& listenAddr)
   : loop_(loop),
     name_(listenAddr.toHostPort()),
     acceptor_(new Acceptor(loop,listenAddr)),
+    threadPool_(new EventLoopThreadPool(loop)),
     started_(false),
     nextConnId_(1)
 {
@@ -24,11 +26,17 @@ TcpServer::~TcpServer()
 {
 }
 
+void TcpServer::setThreadNum(int numThreads)
+{
+  assert(numThreads >= 0);
+  threadPool_->setThreadNum(numThreads);
+}
 void TcpServer::start()
 {
   if( !started_)
   {
     started_ = true;
+    threadPool_->start();
   }
   if(!acceptor_->listening())
   {
@@ -47,25 +55,32 @@ void TcpServer::newConnection(int sockfd, const InetAddress& peerAddr)
   std::string connName = name_ + buf;
 
   InetAddress localAddr(sockets::getLocalAddr(sockfd));
+  EventLoop* ioLoop = threadPool_->getNextLoop();
   TcpConnectionPtr conn(
-          new TcpConnection(loop_, connName, sockfd, localAddr, peerAddr));
+          new TcpConnection(ioLoop, connName, sockfd, localAddr, peerAddr));
   
   connections_[connName] = conn;
   conn->setConnectionCallback(conncb_);
   conn->setMessageCallback(messagecb_);
+  conn->setWriteCompleteCallback(wccb_);
   conn->setCloseCallback(std::bind(&TcpServer::removeConnection, this, std::placeholders::_1));
-  conn->connectEstablished();
-
+  ioLoop->runInLoop(std::bind(&TcpConnection::connectEstablished, conn));
 }
 
 
 
 void TcpServer::removeConnection(const TcpConnectionPtr& conn)
 {
-  loop_->assertInLoopThread();
+  this->loop_->runInLoop(std::bind(&TcpServer::removeConnectionInLoop, this, conn));
+}
+
+void TcpServer::removeConnectionInLoop(const TcpConnectionPtr& conn)
+{
+  this->loop_->assertInLoopThread();
   size_t n = connections_.erase(conn->name());
   assert(n == 1);
-  loop_->queueInLoop(
+  EventLoop* ioLoop = conn->getLoop();
+  ioLoop->queueInLoop(
     std::bind(&TcpConnection::connectDestroyed, conn)
   );
 }

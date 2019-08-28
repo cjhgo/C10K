@@ -17,7 +17,7 @@ int main(int argc, char const *argv[])
   sleep(1);
   loop->runAfter(2, runInThread);
   sleep(3);
-  loop->quit();
+  // loop->quit();
   printf("main()exit\n");
   return 0;
 }

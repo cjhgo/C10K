@@ -14,17 +14,18 @@ Poller::Poller(EventLoop* loop)
 
 Poller::~Poller(){}
 
-void Poller::poll(int timeoutMs, ChannelList* activeChannels)
+Timestamp Poller::poll(int timeoutMs, ChannelList* activeChannels)
 {
   
   int numEvents = ::poll(&*pollfds_.begin(), pollfds_.size(), timeoutMs);
-  
+  Timestamp now = Timestamp::now();
   if( numEvents > 0)
   {
     
     fillActiveChannel(numEvents,activeChannels);
 
   }
+  return now;
 }
 
 void Poller::fillActiveChannel(int numEvents, ChannelList* activeChannels) const
@@ -67,12 +68,12 @@ void Poller::updateChannel(Channel* channel)
     int idx = channel->index();
     assert(0 <= idx && idx < static_cast<short>(pollfds_.size()));
     struct pollfd& pfd = pollfds_[idx];
-    assert(pfd.fd == channel->fd() || pfd.fd == -1);
+    assert(pfd.fd == channel->fd() || pfd.fd == -channel->fd()-1);
     pfd.events = static_cast<short>(channel->events());
     pfd.revents = 0;
     if(channel->isNoneEvent())
     {
-      pfd.fd = -1;
+      pfd.fd = -(channel->fd()+1);      
     }    
   }
 }
@@ -92,9 +93,12 @@ void Poller::removeChannel(Channel* channel)
     pollfds_.pop_back();
   }else
   {
-
     int channelAtEnd = pollfds_.back().fd;
     std::iter_swap(pollfds_.begin()+idx, pollfds_.end()-1);
+    if(channelAtEnd < 0)
+    {
+      channelAtEnd = -channelAtEnd -1;
+    }
     channels_[channelAtEnd]->set_index(idx);
     pollfds_.pop_back();
   }

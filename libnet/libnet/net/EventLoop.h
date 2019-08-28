@@ -8,6 +8,7 @@
 #include "TimerId.h"
 #include "libnet/base/Timestamp.h"
 #include "libnet/net/Callbacks.h"
+#include "libnet/base/logger.h"
 
 namespace libnet
 {
@@ -51,7 +52,7 @@ class EventLoop
   void removeChannel(Channel* channel);
 
   bool isInLoopThread() const
-  {
+  {    
     return threadId_ == std::this_thread::get_id();
   }
 

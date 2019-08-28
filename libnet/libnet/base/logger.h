@@ -79,14 +79,14 @@ class Logger
 
 
 
-#define LOG_NONE Logger::instance().setcurLogLevel(NONE)
-#define LOG_FATAL Logger::instance().setcurLogLevel(FATAL)
-#define LOG_ERROR Logger::instance().setcurLogLevel(ERROR)
-#define LOG_WARNING Logger::instance().setcurLogLevel(WARNING)
-#define LOG_EMPH Logger::instance().setcurLogLevel(EMPH)
-#define LOG_INFO Logger::instance().setcurLogLevel(INFO)
-#define LOG_DEBUG Logger::instance().setcurLogLevel(DEBUG)
-#define LOG_EVERYTHING Logger::instance().setcurLogLevel(EVERYTHING)
+#define LOG_NONE Logger::instance().setcurLogLevel(NONE)<<__FILE__<<__LINE__<<": \n"
+#define LOG_FATAL Logger::instance().setcurLogLevel(FATAL)<<__FILE__<<__LINE__<<": \n"
+#define LOG_ERROR Logger::instance().setcurLogLevel(ERROR)<<__FILE__<<__LINE__<<": \n"
+#define LOG_WARNING Logger::instance().setcurLogLevel(WARNING)<<__FILE__<<__LINE__<<": \n"
+#define LOG_EMPH Logger::instance().setcurLogLevel(EMPH)<<__FILE__<<__LINE__<<": \n"
+#define LOG_INFO Logger::instance().setcurLogLevel(INFO)<<__FILE__<<__LINE__<<": \n"
+#define LOG_DEBUG Logger::instance().setcurLogLevel(DEBUG)<<__FILE__<<__LINE__<<": \n"
+#define LOG_EVERYTHING Logger::instance().setcurLogLevel(EVERYTHING)<<__FILE__<<__LINE__<<": \n"
 }
 
 

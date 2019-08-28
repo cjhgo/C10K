@@ -18,13 +18,13 @@ class EventLoopThread
   ~EventLoopThread();
   EventLoop* startLoop();
 
-
+std::thread thread_;
  private:
   void threadFunc();
 
   EventLoop* loop_;
-  bool existing_;
-  std::thread thread_;
+  bool exiting_;
+  
   std::mutex mutex_;
   std::condition_variable cond_;
 };

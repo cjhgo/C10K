@@ -2,6 +2,7 @@
 #define CHANNEL_H
 
 #include <functional>
+#include "libnet/base/Timestamp.h"
 
 namespace libnet
 {
@@ -11,12 +12,14 @@ class Channel
 {
  public:
   typedef std::function<void()> EventCallback;
+  typedef std::function<void(Timestamp)> ReadEventCallback;
 
   Channel(EventLoop* loop, int fd);
   ~Channel();
   
-  void handleEvent();
-  void setReadCallback(const EventCallback& cb)
+  void handleEvent(Timestamp reveiveTime);
+
+  void setReadCallback(const ReadEventCallback& cb)
   { readCallback = cb;}
   void setWriteCallback(const EventCallback& cb)
   { writeCallback = cb;}
@@ -54,6 +57,11 @@ class Channel
     update();
   }
 
+  //要给对方发消息,关心此fd的可写事件
+  bool isWriting() const
+  {
+    return events_ & kWriteEvent;
+  }  
   int index() {return index_;}
   void set_index(int idx) { index_ = idx;}
 
@@ -71,7 +79,7 @@ class Channel
   int index_;//记录本channel在poll中的pfds中的位置下标
 
   bool eventHandling_;
-  EventCallback readCallback;
+  ReadEventCallback readCallback;
   EventCallback writeCallback;
   EventCallback errorCallback;
   EventCallback closeCallback;

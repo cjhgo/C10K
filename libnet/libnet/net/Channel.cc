@@ -11,6 +11,7 @@ const int Channel::kWriteEvent = POLLOUT;
 
 
 
+
 Channel::Channel(EventLoop* loop, int fdArg)
   :loop_(loop),fd_(fdArg),events_(0),revents_(0),index_(-1),
   eventHandling_(false)
@@ -29,7 +30,7 @@ void Channel::update()
 }
 
 
-void Channel::handleEvent()
+void Channel::handleEvent(Timestamp receiveTime)
 {
   eventHandling_ = true;
   if(revents_ &(POLLHUP) && !(revents_ & POLLIN))
@@ -48,7 +49,7 @@ void Channel::handleEvent()
   if( revents_ & (POLLIN | POLLPRI | POLLRDHUP))
   {
     LOG_DEBUG<<"in events on fd "<<this->fd_<<"\n";
-    if(readCallback)readCallback();
+    if(readCallback)readCallback(receiveTime);
   }
   if( revents_ & ( POLLOUT))
   {

@@ -6,6 +6,7 @@
 
 #include "libnet/net/EventLoop.h"
 #include "libnet/net/Channel.h"
+#include "libnet/base/Timestamp.h"
 
 // struct polllfd;
 typedef std::vector<struct pollfd> PollFdList;
@@ -22,7 +23,7 @@ class Poller
   //用activeChannels接收poll的结果
   //sys/poll的风格是,sys/epoll的风格是
   //都可以用?这样接收?
-  void poll(int timeoutMs, ChannelList* activeChannels);
+  Timestamp poll(int timeoutMs, ChannelList* activeChannels);
 
   //通过channel注册(fd,events)
   void updateChannel(Channel* channel);

@@ -7,9 +7,9 @@ using namespace libnet;
 
 EventLoop* g_loop;
 
-void timeout()
+void timeout(Timestamp receiveTime)
 {
-  printf("Timeout!\n");
+  printf("%s Timeout!\n", receiveTime.toFormattedString().c_str());
   g_loop->quit();
 }
 

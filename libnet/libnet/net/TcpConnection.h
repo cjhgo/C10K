@@ -2,6 +2,7 @@
 #define TCPCONNECTION_H
 #include <memory>
 #include "Callbacks.h"
+#include "libnet/net/utils/Buffer.h"
 #include "utils/InetAddress.h"
 namespace libnet
 {
@@ -31,20 +32,26 @@ class TcpConnection:public std::enable_shared_from_this<TcpConnection>
   bool connected() const { return state_ == kConnected;}
 
 
-  void setMessageCallback(const MessageCallback& cb){ messagecb_ = cb;}
+  void send(const std::string& message);
+  void shutdown();
+
   void setConnectionCallback(const ConnectionCallback& cb){ concb_ = cb;}
-  
+  void setMessageCallback(const MessageCallback& cb){ messagecb_ = cb;}  
+  void setWriteCompleteCallback(const WriteCompleteCallback& cb){wccb_ = cb;}
   void setCloseCallback(const CloseCallback& cb){ closecb_ = cb;}
+  
   void connectEstablished();
   void connectDestroyed();
  private:
-  enum StateE { kConnecting, kConnected, kDisconnected,};
+  enum StateE { kConnecting, kConnected, kDisConnecting, kDisconnected,};
 
   void setState(StateE s) { state_ = s;}
-  void handleRead();  
+  void handleRead(Timestamp receiveTime);  
   void handleWrite();
   void handleClose();
   void handleError();
+  void sendInLoop(const std::string& message);
+  void shutdownInLoop();
 
   EventLoop* loop_;
   std::string name_;
@@ -58,7 +65,10 @@ class TcpConnection:public std::enable_shared_from_this<TcpConnection>
   InetAddress peerAddr_;
   ConnectionCallback concb_;//及处理连接建立也处理连接断开
   MessageCallback messagecb_;
+  WriteCompleteCallback wccb_;
   CloseCallback closecb_;
+  Buffer inputBuffer_;
+  Buffer outputBuffer_;
 };
 
 

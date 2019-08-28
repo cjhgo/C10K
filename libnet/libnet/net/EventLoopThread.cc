@@ -1,5 +1,6 @@
 #include "libnet/net/EventLoopThread.h"
 #include "libnet/net/EventLoop.h"
+#include "libnet/base/logger.h"
 
 using namespace libnet;
 
@@ -7,7 +8,7 @@ using namespace libnet;
 
 EventLoopThread::EventLoopThread()
   : loop_(NULL),
-    existing_(false),    
+    exiting_(false),    
     mutex_(),
     cond_()
 {
@@ -17,15 +18,18 @@ EventLoopThread::EventLoopThread()
 
 EventLoopThread::~EventLoopThread()
 {
-  existing_=true;
-  loop_->quit();
+  exiting_=true;  
+  
   thread_.join();
+  loop_->quit();
+  
 }
 
 
 EventLoop* EventLoopThread::startLoop()
 {
   thread_=std::thread(std::bind(&EventLoopThread::threadFunc, this));
+  LOG_DEBUG<<"threadfunc begin...\n";
   {
     std::unique_lock<std::mutex> lock(this->mutex_);
     while (loop_ == NULL)
@@ -50,4 +54,5 @@ void EventLoopThread::threadFunc()
   }
 
   loop.loop();
+  LOG_DEBUG<<"loop ending...?\n";
 }
