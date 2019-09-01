@@ -1,6 +1,6 @@
 [toc]
 
-### c/c++ socket api
+### basic socket api
 包含头文件
 ```c
 #include <sys/socket.h> for bind/listen/accept
@@ -114,8 +114,239 @@ connect这一步没必要使用nonblock,握手链接有必要等待,这个时候
   1. 使用socket函数创建套接字
   2. server端:bind->listen->accept->send/receive
   3. client端:connect->send/receive
-  
-#### socket阻塞在哪里
+
+### 几个重要的socket选项
+`man 7 socket`有对各种socket选项的解释
+然而,最有效的资料来源还是unp,section7.5,generic socket options
+
+#### `SO_REUSEADDR`和`SO_REUSEPORT`选项
+
+关于这两个选项,首先要解释一点背景知识
+BSD的socket实现是其他所有系统的socket实现之母,
+但是后来BSD,FreeBSD,linux...这些系统后来又有了自己的不同特性
+这也是程序可移植性问题的来源.
+
+
+SO_REUSEPORT和SO_REUSEADDR在不同的操作系统上行为是不一样的
+
+
+然后,介绍一下`rules used in validating addresses supplied in a bind`
+socket执行bind操作时,os执行的对地址的检验规则
+假设系统有好几个local address,
+其中`0.0.0.0`特别记为a,然后另有有线网卡b,无线网卡c,等等等个本地地址
+`(ip,port)`是一个binding,
+那么(b,8000)和(c,8000)这两个binding总是可以的,不算重复
+然后(b,8000)和(b,8000)当然是冲突,不兼容,重复的
+也就是说,默认情况下,
+bind不同ip+同一port总是可以的,bind相同ip+相同port是不可以的
+
+
+然后,unp#ch7.5中,对BSD的`SO_REUSEADDR`这个选项介绍说,它可以用于4个不同的目的
+
+1. SO_REUSEADDR允许一个listening server bind一个port,即使系统中仍然存在一个用了这个port的连接
+比较典型的情况就是fork-child模式中,server重启
+并且它说:`All TCP servers should specify this socket option to allow the server to be restarted in this situation.`
+即每个socket都要指定这个选项
+2. SO_REUSEADDR允许一个listening server bind一个port到某个地址,即使系统中这个port已经被bind到了`0.0.0.0`这个地址
+这里要解释一下,前边说(b,8000),(c,8000)两个binding不重复,但是port相同的情况下,`0.0.0.0`和其他所有本机地址冲突
+在这个目的中,so_reuseaddr这个选项可以放松这个限制,使得后来的ip和前边的`0.0.0.0`不冲突
+一个主要的场景就是HTTP的ip化名技术
+3. 在udp中用于把同一个port绑定到不同的本地地址上
+4. 如果协议支持,这个选项可以用于允许完全重复的binding,注意仅限于udp.
+SO_REUSEADDR allows completely duplicate bindings, if the transport protocol supports it
+用于udp,多播...?
+
+
+但是,但是,但是,以上说的是BSD中`SO_REUSEADDR`选项的作用,
+linux上的`SO_REUSEADDR`选项和BSD上的有什么不一样呢?
+Prior to Linux 3.9, only the option SO_REUSEADDR existed. 
+This option behaves generally the same as in BSD **with two important exceptions**:
+
+1. As long as a listening (server) TCP socket is bound to a specific port, 
+the SO_REUSEADDR option is entirely ignored for all sockets targeting that port
+Binding a second socket to the same port is only possible if it was also possible in BSD without having SO_REUSEADDR set.
+地址上只要有处于listening状态的socket,那么SO_REUSEADDR这个选项没有任何作用
+(也就是只有server socket挂掉了,不listen了,才能被重新bind)
+允许绑定到同一个port的ip的种类和BSD中不使用这个选项的情形一样
+(也就是没有放松对`0.0.0.0`地址的限制)
+2. for client sockets, this option behaves exactly like SO_REUSEPORT in BSD, 
+as long as both had this flag set before they were bound.
+对于只bind,不listen的,用于connect/recevfrom的客户端套接字,这个选项的效果和BSD上的`SO_REUSEPORT`选项一样
+(也就是,只要都设置了这个选项(前边的没设置不行),那么多个socket可以bind到同样的ip:port,因为它们不listen)
+
+具体在linux系统的手册中,`man 7 socket`是这么说的
+>Indicates  that  the  rules used in validating addresses supplied in a bind(2) call should 
+allow reuse of local addresses.   
+**是的,也是说改变了bind时对ip:port的检验规则**
+For AF_INET sockets this means that a socket may bind, 
+**可以绑定到同一个ip:port**
+except when there is an active listening socket bound to the address.
+**但是如果那个socket还在listen的话是不行的,没在listen,time_wait状态下是可以的,或者是一个client socket不listen也可以!**
+When the listening socket is bound to INADDR_ANY with a specific port then 
+it is  not  possible to bind to this port for any local address.
+Argument is an integer boolean flag.
+INADDR_ANY地址,即`0.0.0.0`这个地址和其他所有地址冲突
+也就是说,BSDtcp中第2个场景,对`0.0.0.0`的放松限制,在linux上并不支持
+也就是unp中所说的
+For security reasons, some operating systems prevent any "more specific" bind to a port that is already bound to the wildcard address, that is, the series of binds described here would not work with or without SO_REUSEADDR.
+
+
+
+即,linux中的`SO_REUSEADDR`的行为和unp描述的BSDtcp实现,只能说是取交集的关系.
+linux的这个选项只是允许了对非listen状态的server socket ip:port的重用
+并没有放松对`0.0.0.0`的冲突检查限制
+
+
+对于Linux上的`SO_REUSEADDr`这个选项的作用,这里有个概括,很切中要害
+
+1. The port having TIME_WAIT status is recognised as un-used port when `bind` system call check if the port is in use or not
+bind时,处于time_wait状态的端口可以被认为没被占用
+2. The socket not needing to call `listen` system call is allowed to bind exact same ip address and same port (TCP Client, UDP Server , UDP Client)
+不listen的bind,可以使用完全重复的地址(要都指定选项)
+
+
+注意,无论是BSD还是linux,SO_REUSEADDR虽然解决了`address already in use`这个错误,但是,都没有允许`a completely duplicated binding+listening`
+(忽略bsd tcp,purpose 4)
+因为它们只是允许连接仍然存在的情况下,新的bind+listening,而不是说可以有相同ip:port的两个bind同时存在
+我们还是不能启动捆绑相同IP地址和相同端口号的多个服务器
+
+
+而`SO_REUSEPORT`选项,真正的改变了这一点,
+这个选项允许我们创建完全重复的binding+listening,
+前提是每一个重复的binding都指定了这个选项
+
+
+多数操作系统的tcp实现都是从BSD继承的,后来它们各自演化.
+BSD一开始就有的REUSEADDR选项都被各自操作系统继承实现了
+BSD后来自己添加的REUSEPORT选项则取决于系统的各自实现.
+
+
+对于`SO_REUSEPORT`,
+在linux上,man 7 socket手册是这么解释它的作用的
+>Permits multiple AF_INET or AF_INET6 sockets to be bound to an identical socket address.  
+This option must be set on each socket (including the first socket) prior to calling bind(2) on the socket.  
+To prevent port hijacking, all of the processes binding to the same address must have the same effective UID.
+This option can be employed  with both TCP and UDP sockets.<br>
+For  TCP  sockets,  this option allows accept(2) load distribution in a multi-threaded server to be improved by using a distinct listener socket for each thread.  
+This provides improved load distribution as compared to traditional techniques 
+such using a single accept(2)ing thread that distributes connections, 
+or having multiple threads that compete to accept(2) from the same socket.
+For UDP sockets, the use of this option can provide better distribution of incoming datagrams to multiple processes (or threads) 
+as compared to the traditional technique of having multiple processes compete to receive datagrams on the same socket.
+
+ 
+即允许多个套接字bind到完全相同的地址(ip:port),前提是每一个bind同样地址的socket都要指定这个选项.
+为了避免端口劫持,每个socket都要属于同一个uid.
+
+对于tcp连接来说,这个选项可以提高多线程accept操作的负载分布.
+具体的方法是每个线程都启一个socket监听同样的地址,由内核负责在线程见分配新连接事件.
+这比起传统的多线程accept中一个线程负责accept然后分发连接,或多个线程竞争accept的方式都要高效.
+
+对于udp连接来说...
+
+
+
+这两个选项的区别是什么呢?
+
+这是一个很经典的答案
+https://stackoverflow.com/questions/14388706/how-do-so-reuseaddr-and-so-reuseport-differ
+
+这是一个更切中要害的答案
+https://medium.com/uckey/the-behaviour-of-so-reuseport-addr-1-2-f8a440a35af6
+https://medium.com/uckey/so-reuseport-addr-2-2-how-packets-forwarded-to-multiple-sockets-ce4b83cd0fd2
+
+
+在linux平台上,
+
+1. reuseaddr只是允许后来的server在一个仍然存在连接的port上bind
+reuseport是真的允许,系统启动多个完全相同的binding
+并且,SO_REUSEPORT does not imply SO_REUSEADDR
+如果前边的socket没有特殊设置,后边的socket只设置了reuse port,
+那么还是会遇到address already in use
+
+2. 对于Reuseadd选项(bind+listen的情况),只需要后来的socket设置这个属性就能生效
+对于Reuseport选项,只有前边的socket允许了port reuse,后边的socket才能真正reuse port
+
+3. >SO_REUSEPORT lets you bind the same address *and* port, but only if all the binders have specified it.
+But when binding a multicast address (its main use), SO_REUSEADDR is considered identical to SO_REUSEPORT
+
+在其他平台上,由于不同的系统有不同的实现,其具体差别就多了
+[SO_REUSEADDR与SO_REUSEPORT平台差异性与测试](https://www.cnblogs.com/xybaby/p/7341579.html)
+这篇文章测试了这个问题
+
+
+
+总结一下:
+
++ 系统中永远没有两个相同的tcp连接的五元组
+无论是重用了addr还是重用了port,任何时候一个由五元组表示的连接必须是唯一的
+系统中也许有相同(tcp,listen addr,listen port,?,?)的socket,但是不允许有相同(tcp,lislten addr,listen port,remote addr,remote port)的socket
++ SO_REUSEPORT和SO_REUSEADDR在不同的操作系统上行为是不一样的
++ 默认情况下,不同的ip可以bind到相同的port,但是不允许完全重复的binding
+以及`0.0.0.0`地址不可以和其他地址bind到同一个port
++ BSD系统下,SO_REUSEADDR 使得0.0.0.0 与 其他地址不冲突;linux下,并不支持这一点
++ SO_REUSEPORT使得系统支持完全相同的binding;
+Linux3.9之后加入了这一支持
++ linux下的client socket(不listen),使用SO_REUSEADDR作用和SO_REUSEPORT一样,可以bind到同样的ip:port
++ Windows只有SO_REUSEADDR选项,没有SO_REUSEPORT。
+#### SO_LINGER
+
+>Sets or gets the SO_LINGER option.  The argument is a linger structure.
+
+    struct linger {
+        int l_onoff;    /* linger active */
+        int l_linger;   /* how many seconds to linger for */
+    };
+
+>When enabled, a close(2) or shutdown(2) will not return until all queued messages for the socket have been successfully sent or the linger timeout has been reached.  
+Otherwise, the call returns immediately and the closing is done in the background.  When the socket is closed as part of exit(2), it always lingers in the background.
+
+
+这个参数用于控制 close时 如果缓冲区还有数据 时的行为
+影响的并不是time_wait等待的2msl时间
+
+>SO_LINGER is used when you close the socket and there is still data
+to be sent to the other end, but the other end has a zero window.  The
+implementation will wait until SO_LINGER has expired before giving up on
+sending that data.
+
+### 解决accept的惊群问题
+惊群问题的引入:
+
+多线程程序监听server socket有两种方式
+
+1. 用一个线程专门负责listen,然后把accept得到client fd交给其他线程处理
+这种方法的缺点是, 负责listen的线程成为了系统的瓶颈
+2. 多个线程在server socket上竞争,谁拿到server socket,谁负责accept
+这种方式就存在,一个连接到来,kernel会唤醒多个线程的问题
+也就是惊群问题
+
+>In Linux, when multiple threads call accept() on the same TCP socket, they get put on the same wait queue, waiting for an incoming connection to wake them up. In the Linux 2.2.9 kernel (and earlier), when an incoming TCP connection is accepted, the wake_up_interruptible() function is invoked to awaken waiting threads. This function walks the socket's wait queue and awakens everybody. All but one of the threads, however, will put themselves back on the wait queue to wait for the next connection. This unnecessary awakening is commonly referred to as a "thundering herd" problem and creates scalability problems for network server applications.
+
+使用reuseport选项可以解决prefork模型中容易出现的惊群问题
+即多个不同的套接字listen同样的ip:port
+由内核负责新连接到达时唤醒那个套接字负责accept
+内核层面实现负载均衡;安全层面，监听同一个端口的套接字只能位于同一个用户下面
+
+
+reuseport的具体patch
+https://lwn.net/Articles/542718/
+对patch的代码分析
+http://m.blog.chinaunix.net/uid-10167808-id-3807060.html
+
+对reuseport的介绍
+https://lwn.net/Articles/542629/
+
+对reuseport的具体实践的更多信息
+http://www.blogjava.net/yongboy/archive/2015/02/12/422893.html
+
+
+在有portreuse之前,人们怎么解决惊群问题呢?
+这里总结了几种方法
+http://www.citi.umich.edu/projects/linux-scalability/reports/accept.html
+
+
+### socket阻塞在哪里
 要想理解非阻塞之后,socket的读写行为,首先要明白
 socket什么情况下会阻塞?
 对于读操作,socket会一直阻塞直到缓冲区中有数据
@@ -150,7 +381,7 @@ socket读写是阻塞在缓冲区上的,而不是对方进行了读写.
 **nonblock socket调用read/send可能block的时候,EAGAIN是设置在errno这个变量中的,read/send本身返回的是-1**
 (想想确实应该这样,EAGAIN的值是11,如果返回11岂不是和读了11byte混淆了)
 
-#### 怎样用`fcntl`来设置socket为nonblock
+### 怎样用`fcntl`来设置socket为nonblock
 ```c
 int flags = handleErr(
       fcntl(client_fd, F_GETFL), 
@@ -161,7 +392,7 @@ handleErr(
 ```
 第一步要获取flag,第二步才能设置,至于fcntl函数的详细理解,甚至于setsockopt中的level的概念,又是另一个话题了.
 
-#### 如何处理关闭的套接字
+### 如何处理关闭的套接字;如何优雅关闭
 + 向一个closed socket进行写操作会发出`SIGPIPE`信号,并且设置errno为EPIPE
 + 从一个closed socket进行读操作会得到`eof`,0返回值
 
